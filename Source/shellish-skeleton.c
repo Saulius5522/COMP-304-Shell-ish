@@ -323,7 +323,6 @@ int process_command(struct command_t *command) {
       return SUCCESS;
     }
   }
-
   pid_t pid = fork();
   if (pid == 0) // child
   {
@@ -337,7 +336,24 @@ int process_command(struct command_t *command) {
 
     // TODO: do your own exec with path resolving using execv()
     // do so by replacing the execvp call below
-    execvp(command->name, command->args); // exec+args+path
+
+
+    //execvp(command->name, command->args); // exec+args+path
+
+    char* env_path = getenv("PATH");
+    char* path = strtok(env_path, ":");
+    char full_path[1000];
+    
+    while (path != NULL) {
+      strcpy(full_path, path);
+      strcat(full_path, "/");
+      strcat(full_path, command->name);
+
+      execv(full_path, command->args); 
+      path = strtok(NULL, ":"); //start from where you finished
+    }
+    
+
     printf("-%s: %s: command not found\n", sysname, command->name);
     exit(127);
   } else {
