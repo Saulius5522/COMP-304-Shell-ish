@@ -300,7 +300,7 @@ int prompt(struct command_t *command) {
 
   parse_command(buf, command);
 
-  // print_command(command); // DEBUG: uncomment for debugging
+  print_command(command); // DEBUG: uncomment for debugging
 
   // restore the old settings
   tcsetattr(STDIN_FILENO, TCSANOW, &backup_termios);
@@ -308,6 +308,11 @@ int prompt(struct command_t *command) {
 }
 
 int process_command(struct command_t *command) {
+  int count = command -> arg_count;
+
+  //printf("%s \n", command -> args[count - 1]);
+  //printf("%d \n", count);
+
   int r;
   if (strcmp(command->name, "") == 0)
     return SUCCESS;
@@ -322,6 +327,14 @@ int process_command(struct command_t *command) {
         printf("-%s: %s: %s\n", sysname, command->name, strerror(errno));
       return SUCCESS;
     }
+  }
+  count = command -> arg_count;
+
+  if(count > 0 && (command -> args[count - 1] != NULL) && strcmp(command -> args[count - 1], "&") == 0) // checks if command has & at the end
+  {
+    command -> background = 1; // changes background status to 1
+    command -> args[count - 1] = NULL; // changes the background
+    command -> arg_count = command -> arg_count - 1; // lowers arg count by 1
   }
   pid_t pid = fork();
   if (pid == 0) // child
@@ -340,25 +353,28 @@ int process_command(struct command_t *command) {
 
     //execvp(command->name, command->args); // exec+args+path
 
-    char* env_path = getenv("PATH");
-    char* path = strtok(env_path, ":");
-    char full_path[1000];
-    
-    while (path != NULL) {
-      strcpy(full_path, path);
-      strcat(full_path, "/");
-      strcat(full_path, command->name);
+    char* env_path = getenv("PATH"); // gets enviroment path
+    char* temp_path = strtok(env_path, ":"); //divides by :
+    char path[2000];
+    while (temp_path != NULL) {
+      strcpy(path, temp_path); // copies part of already parsed path to full path
+      strcat(path, "/"); // appends / char
+      strcat(path, command->name); // appends command name to full path
 
-      execv(full_path, command->args); 
-      path = strtok(NULL, ":"); //start from where you finished
+      execv(path, command->args); // executes path with arguments
+      temp_path = strtok(NULL, ":"); //start from where you finished
     }
     
-
     printf("-%s: %s: command not found\n", sysname, command->name);
     exit(127);
   } else {
     // TODO: implement background processes here
-    wait(0); // wait for child process to finish
+    if(command -> background == 0) // check if command is in foreground
+    {
+      //wait(0); // sometimes works, sometimes doesnt
+      waitpid(pid, NULL, 0); // blocks the parent process until child process is finished,
+      // line 375 was recommended by Gemini AI
+    }
     return SUCCESS;
   }
 }
