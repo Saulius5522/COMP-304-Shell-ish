@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <termios.h> // termios, TCSANOW, ECHO, ICANON
 #include <unistd.h>
+#include <fcntl.h>
 const char *sysname = "shellish";
 
 enum return_codes {
@@ -329,7 +330,7 @@ int process_command(struct command_t *command) {
     }
   }
   count = command -> arg_count;
-
+  
   if(count > 0 && (command -> args[count - 1] != NULL) && strcmp(command -> args[count - 1], "&") == 0) // checks if command has & at the end
   {
     command -> background = 1; // changes background status to 1
@@ -337,6 +338,7 @@ int process_command(struct command_t *command) {
     command -> arg_count = command -> arg_count - 1; // lowers arg count by 1
   }
   pid_t pid = fork();
+
   if (pid == 0) // child
   {
     /// This shows how to do exec with environ (but is not available on MacOs)
@@ -353,9 +355,56 @@ int process_command(struct command_t *command) {
 
     //execvp(command->name, command->args); // exec+args+path
 
+    //temp place for redirection
+
+    //har* env_path = getenv("PATH"); 
+    //char *redirecting_path = command -> args + 1;
+
+    //reads from file, input is read from file. It replaces fd(file descriptor) to read only from the chosen file
+    if(command -> redirects[0] != NULL) // <
+    {
+      int file = open(command -> redirects[0], O_RDONLY, 0777);
+
+      if(file == -1)
+      {
+        return -2;
+      }
+      int file2 = dup2(file, STDIN_FILENO);
+
+      close(file);
+    }
+    //check if file exists, if not - truncate. It replaces fd(file descriptor) to check whether file exists and if it does - to overwrite the contents
+    if(command -> redirects[1] != NULL) // >
+    {
+      int file = open(command -> redirects[1], O_WRONLY | O_TRUNC | O_CREAT, 0777);
+
+      if(file == -1)
+      {
+        return -2;
+      }
+      int file2 = dup2(file, STDOUT_FILENO);
+
+      close(file);
+    }
+    //check if file exists, if not - append. It replaces fd(file descriptor) to check whether file exists and if it does - to overwrite the contents
+    if(command -> redirects[2] != NULL) // >>
+    {
+      int file = open(command -> redirects[2], O_WRONLY | O_CREAT | O_APPEND, 0777);
+
+      if(file == -1)
+      {
+        return -2;
+      }
+      int file2 = dup2(file, STDOUT_FILENO);
+
+      close(file);
+    }
+    //--------------------------//
+
     char* env_path = getenv("PATH"); // gets enviroment path
     char* temp_path = strtok(env_path, ":"); //divides by :
     char path[2000];
+
     while (temp_path != NULL) {
       strcpy(path, temp_path); // copies part of already parsed path to full path
       strcat(path, "/"); // appends / char
@@ -373,7 +422,7 @@ int process_command(struct command_t *command) {
     {
       //wait(0); // sometimes works, sometimes doesnt
       waitpid(pid, NULL, 0); // blocks the parent process until child process is finished,
-      // line 375 was recommended by Gemini AI
+      // line 424 was recommended by Gemini AI
     }
     return SUCCESS;
   }
