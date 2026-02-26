@@ -10,7 +10,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <dirent.h>
-#include <signal.h>
+#include <signal.h> 
 const char *sysname = "shellish";
 enum return_codes {
   SUCCESS = 0,
@@ -312,7 +312,7 @@ int prompt(struct command_t *command) {
   return SUCCESS;
 }
 
-int cut_Command(struct command_t *command)
+int cut_command(struct command_t *command)
 {
   char splitter = '\t';
   int requested_fields[100];
@@ -487,6 +487,54 @@ void chatroom(char *roomname, char *username)
     kill(pid, SIGKILL); // kills the process
   }
 }
+//deletes text files, that are empty
+void cleanuptxt()
+{
+  DIR *directory = opendir("."); // opens directory
+  if(directory == NULL)
+  {
+    return;
+  }
+  struct dirent *oneinstance;
+  struct stat file_stats;
+
+  while(((oneinstance = readdir(directory)) != NULL)) //checks if directory exists
+  {
+    char *file_end = strrchr(oneinstance->d_name, '.');
+    if(file_end != NULL && strcmp(file_end, ".txt") == 0) //checks if file is a text file
+    {
+      if(stat(oneinstance->d_name, &file_stats) == 0)
+      {
+        if(file_stats.st_size == 0)
+        {
+          printf("%s\n", oneinstance->d_name); // prints deleted file
+          unlink(oneinstance->d_name); // deletes text file
+        }
+      }
+    }
+  }
+  closedir(directory); // closes directory stream
+}
+
+void exec_from_path(char *temp_path, char *path, struct command_t *command, bool isNext)
+{
+  while (temp_path != NULL) 
+  {
+    strcpy(path, temp_path); // copies part of already parsed path to full path
+    strcat(path, "/"); // appends / char
+    if(isNext)
+    {
+    strcat(path, command->next->name); // appends command name to full path
+    execv(path, command->next->args); // executes path with arguments
+    }
+    else
+    {
+    strcat(path, command->name); // appends command name to full path
+    execv(path, command->args); // executes path with arguments
+    }
+    temp_path = strtok(NULL, ":"); //start from where you finished
+  }
+}
 
 int process_command(struct command_t *command) 
 {
@@ -518,6 +566,12 @@ int process_command(struct command_t *command)
     command->arg_count = command->arg_count - 1; // lowers arg count by 1
   }
 
+  //cleanuptxt command
+  if(strcmp(command->name, "cleanuptxt") == 0)
+  {
+    cleanuptxt();
+    return SUCCESS;
+  }
 
   int fd[2];
   char* env_path = getenv("PATH"); // gets enviroment path
@@ -559,7 +613,7 @@ int process_command(struct command_t *command)
 
       if(strcmp(command->name, "cut") == 0)
       {
-        cut_Command(command);
+        cut_command(command);
         exit(0);
       }
 
@@ -576,15 +630,8 @@ int process_command(struct command_t *command)
       env_path = getenv("PATH"); // gets enviroment path
       char* temp_path = strtok(env_path, ":"); //divides by :
       char path[2000];
+      exec_from_path(temp_path, path, command, false);
 
-      while (temp_path != NULL) {
-        strcpy(path, temp_path); // copies part of already parsed path to full path
-        strcat(path, "/"); // appends / char
-        strcat(path, command->name); // appends command name to full path
-
-        execv(path, command->args); // executes path with arguments
-        temp_path = strtok(NULL, ":"); //start from where you finished
-      }
       printf("-%s: %s: command not found\n", sysname, command->name);
       exit(127); 
     }
@@ -604,7 +651,7 @@ int process_command(struct command_t *command)
 
       if(strcmp(command->next->name, "cut") == 0)
       {
-        cut_Command(command);
+        cut_command(command);
         exit(0);
       }
 
@@ -619,15 +666,8 @@ int process_command(struct command_t *command)
       }
       char* temp_path2 = strtok(env_path, ":"); //divides by :
       char path2[2000];
+      exec_from_path(temp_path2, path2, command, true);
 
-      while (temp_path2 != NULL) {
-        strcpy(path2, temp_path2); // copies part of already parsed path to full path
-        strcat(path2, "/"); // appends / char
-        strcat(path2, (command->next->name)); // appends command name to full path
-
-        execv(path2, (command->next->args)); // executes path with arguments
-        temp_path2 = strtok(NULL, ":"); //start from where you finished
-      }
       printf("-%s: %s: command not found\n", sysname, command->name);
       exit(127); 
     }
@@ -637,7 +677,7 @@ int process_command(struct command_t *command)
     {
       waitpid(pid1, NULL, 0); // blocks the parent process until child process is finished,
       waitpid(pid2, NULL, 0);
-      // line 422 was recommended by Gemini AI, it was used to understand when to use waitpid() and when to use wait().
+      // waitpid recommended by Gemini AI, it was used to understand when to use waitpid() and when to use wait().
     }
     return SUCCESS;
   }
@@ -654,7 +694,7 @@ int process_command(struct command_t *command)
 
       if(strcmp(command->name, "cut") == 0)
       {
-        cut_Command(command);
+        cut_command(command);
         exit(0);
       }
 
@@ -667,14 +707,8 @@ int process_command(struct command_t *command)
           chatroom(command->args[1], command->args[2]);
         }
       }
-
-      while (temp_path2 != NULL) {
-        strcpy(path2, temp_path2); // copies part of already parsed path to full path
-        strcat(path2, "/"); // appends / char
-        strcat(path2, (command->name)); // appends command name to full path
-        execv(path2, (command->args)); // executes path with arguments
-        temp_path2 = strtok(NULL, ":"); //start from where you finished
-      }
+      exec_from_path(temp_path2, path2, command, false);
+      
       printf("-%s: %s: command not found\n", sysname, command->name);
       exit(127); 
     }
