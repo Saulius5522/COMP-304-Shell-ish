@@ -7,14 +7,16 @@
 #include <termios.h> // termios, TCSANOW, ECHO, ICANON
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <dirent.h>
+#include <signal.h>
 const char *sysname = "shellish";
-
 enum return_codes {
   SUCCESS = 0,
   EXIT = 1,
   UNKNOWN = 2,
 };
-
 struct command_t {
   char *name;
   bool background;
@@ -70,6 +72,8 @@ int free_command(struct command_t *command) {
   free(command);
   return 0;
 }
+
+
 
 /**
  * Show the command prompt
@@ -308,10 +312,186 @@ int prompt(struct command_t *command) {
   return SUCCESS;
 }
 
-int process_command(struct command_t *command) {
-  int count = command -> arg_count;
+int cut_Command(struct command_t *command)
+{
+  char splitter = '\t';
+  int requested_fields[100];
+  int field_count = 0;
+  char buffer[1000];
 
-  //printf("%s \n", command -> args[count - 1]);
+  int arg_count = command->arg_count;
+  for(int i = 0; i < arg_count; i++)
+  {
+    if(command -> args[i] == NULL)
+    {
+      break;
+    }
+    if(strcmp(command->args[i], "-d") == 0 || strcmp(command->args[i], "--delimiter") == 0)
+    {
+      splitter = command->args[i + 1][0]; 
+      i++;
+    }
+    else if(strcmp(command->args[i], "-f") == 0 || strcmp(command->args[i], "--fields") == 0)
+    {
+      char *field_string = strdup(command->args[i + 1]);
+      char *field_by_index = strtok(field_string, ",");
+      while(field_by_index != NULL)
+      {
+        int temp_index = atoi(field_by_index);
+        requested_fields[field_count++] = temp_index;
+        field_by_index = strtok(NULL, ",");
+      }
+      i++;
+    }
+  }
+  while(fgets(buffer, sizeof(buffer), stdin) != NULL)
+  {
+    char *line_fields[100];
+    int total_fields = 0;
+    char splitters[3] = {splitter, '\n', '\0'};
+
+    char *fields_by_index = strtok(buffer, splitters);
+
+    while(fields_by_index != NULL)
+    {
+      line_fields[total_fields++] = fields_by_index;
+      fields_by_index = strtok(NULL, splitters);
+    }
+    for(int j = 0; j < field_count; j++)
+    {
+      int temp_field = requested_fields[j];
+
+      printf("%s", line_fields[temp_field - 1]);
+
+      if(j < field_count - 1)
+      {
+        printf("%c", splitter);
+      }
+    }
+    printf("\n");
+  }
+  return SUCCESS;
+}
+
+int IOredirections(struct command_t *command)
+{
+    //reads from file, input is read from file. It replaces fd(file descriptor) to read only from the chosen file
+    if(command->redirects[0] != NULL) // <
+    {
+      int file = open(command->redirects[0], O_RDONLY, 0777); // taken example from https://www.youtube.com/watch?v=5fnVr-zH-SE
+
+      if(file == -1)
+      {
+        return -2;
+      }
+      dup2(file, STDIN_FILENO);
+
+      close(file);
+    }
+    //check if file exists, if not - truncate. It replaces fd(file descriptor) to check whether file exists and if it does - to overwrite the contents
+    if(command->redirects[1] != NULL) // >
+    {
+      int file = open(command->redirects[1], O_WRONLY | O_TRUNC | O_CREAT, 0777); // taken example from https://www.youtube.com/watch?v=5fnVr-zH-SE
+
+      if(file == -1)
+      {
+        return -2;
+      }
+      dup2(file, STDOUT_FILENO);
+
+      close(file);
+    }
+    //check if file exists, if not - append. It replaces fd(file descriptor) to check whether file exists and if it does - to overwrite the contents
+    if(command->redirects[2] != NULL) // >>
+    {
+      int file = open(command->redirects[2], O_WRONLY | O_CREAT | O_APPEND, 0777); // taken example from https://www.youtube.com/watch?v=5fnVr-zH-SE
+
+      if(file == -1)
+      {
+        return -2;
+      }
+      dup2(file, STDOUT_FILENO);
+
+      close(file);
+    }
+    return SUCCESS;
+}
+
+void chatroom(char *roomname, char *username)
+{
+  int fd;
+  char room_path[300];
+  char pipe[512];
+
+  snprintf(room_path, sizeof(room_path), "/tmp/chatroom-%s", roomname);   
+  snprintf(pipe, sizeof(pipe), "%s/%s", room_path, username);
+
+
+  mkdir(room_path, 0777); // example taken from https://www.geeksforgeeks.org/linux-unix/create-directoryfolder-cc-program/
+  mkfifo(pipe, 0666); // example taken from https://www.geeksforgeeks.org/cpp/named-pipe-fifo-example-c-program/
+
+  pid_t pid = fork();
+  if(pid == 0)
+  {
+    char str1[1000];
+    while(1)
+    {
+      fd = open(pipe, O_RDONLY);
+      if(read(fd, str1, 1000) > 0)
+      {
+        printf("%s", "\n");
+        printf("%s", str1);
+        printf("%s", "\n");
+      }
+      close(fd);
+    }
+  }
+  else
+  {
+    char str2[1000];
+    while(1)
+    {
+      printf("[%s] %s:", roomname, username);
+      fgets(str2, 1000, stdin);
+
+      DIR *directory = opendir(room_path); //example taken https://www.baeldung.com/linux/list-files-using-c
+      struct dirent *dir;
+      if(directory)
+      {
+        while((dir = readdir(directory)) != NULL) //checks if there is directory
+        {
+          if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0 || strcmp(dir->d_name, username) == 0)
+          {
+            continue;
+          }
+
+          if(fork() == 0) //continues checking directories
+          {
+            char str3[1000];
+            sprintf(str3, "%s/%s", room_path, dir->d_name); //creates directory path
+
+            int fd_out = open(str3, O_WRONLY);
+            if(fd_out != -1)
+            {
+              char result[2000];
+              sprintf(result, "[%s] %s: %s", roomname, username, str2);
+              write(fd_out, result, strlen(result) + 1); // writes the result
+              close(fd_out);
+            }
+            exit(0);
+          }
+        }
+        closedir(directory); // closes the directory
+      }
+    }
+    kill(pid, SIGKILL); // kills the process
+  }
+}
+
+int process_command(struct command_t *command) 
+{
+
+  //printf("%s \n", command->args[count - 1]);
   //printf("%d \n", count);
 
   int r;
@@ -329,107 +509,186 @@ int process_command(struct command_t *command) {
       return SUCCESS;
     }
   }
-  count = command -> arg_count;
+  int count = command->arg_count;
   
-  if(count > 0 && (command -> args[count - 1] != NULL) && strcmp(command -> args[count - 1], "&") == 0) // checks if command has & at the end
+  if(count > 0 && (command->args[count - 1] != NULL) && strcmp(command->args[count - 1], "&") == 0) // checks if command has & at the end
   {
-    command -> background = 1; // changes background status to 1
-    command -> args[count - 1] = NULL; // changes the background
-    command -> arg_count = command -> arg_count - 1; // lowers arg count by 1
+    command->background = 1; // changes background status to 1
+    command->args[count - 1] = NULL; // changes the background
+    command->arg_count = command->arg_count - 1; // lowers arg count by 1
   }
-  pid_t pid = fork();
 
-  if (pid == 0) // child
+
+  int fd[2];
+  char* env_path = getenv("PATH"); // gets enviroment path
+
+  if(command->next != NULL)
   {
-    /// This shows how to do exec with environ (but is not available on MacOs)
-    // extern char** environ; // environment variables
-    // execvpe(command->name, command->args, environ); // exec+args+path+environ
+    //prepares or creates the pipe
+    pid_t pid1;
+    pipe(fd);
 
-    /// This shows how to do exec with auto-path resolve
-    // add a NULL argument to the end of args, and the name to the beginning
-    // as required by exec
+    //forking
+    pid1 = fork();
 
-    // TODO: do your own exec with path resolving using execv()
-    // do so by replacing the execvp call below
-
-
-    //execvp(command->name, command->args); // exec+args+path
-
-    //temp place for redirection
-
-    //har* env_path = getenv("PATH"); 
-    //char *redirecting_path = command -> args + 1;
-
-    //reads from file, input is read from file. It replaces fd(file descriptor) to read only from the chosen file
-    if(command -> redirects[0] != NULL) // <
+    if (pid1 == 0) // child
     {
-      int file = open(command -> redirects[0], O_RDONLY, 0777);
+      /// This shows how to do exec with environ (but is not available on MacOs)
+      // extern char** environ; // environment variables
+      // execvpe(command->name, command->args, environ); // exec+args+path+environ
 
-      if(file == -1)
+      /// This shows how to do exec with auto-path resolve
+      // add a NULL argument to the end of args, and the name to the beginning
+      // as required by exec
+
+      // TODO: do your own exec with path resolving using execv()
+      // do so by replacing the execvp call below
+
+
+      //execvp(command->name, command->args); // exec+args+path
+
+
+      IOredirections(command);
+
+      //write to pipe - changes file descriptor to write to buffer
+      dup2(fd[1], STDOUT_FILENO);
+      close(fd[1]);
+      close(fd[0]);
+
+      //cut command
+
+      if(strcmp(command->name, "cut") == 0)
       {
-        return -2;
+        cut_Command(command);
+        exit(0);
       }
-      int file2 = dup2(file, STDIN_FILENO);
 
-      close(file);
-    }
-    //check if file exists, if not - truncate. It replaces fd(file descriptor) to check whether file exists and if it does - to overwrite the contents
-    if(command -> redirects[1] != NULL) // >
-    {
-      int file = open(command -> redirects[1], O_WRONLY | O_TRUNC | O_CREAT, 0777);
+      //chatroom command
 
-      if(file == -1)
+      if(strcmp(command->name, "chatroom") == 0)
       {
-        return -2;
+        if(!command->arg_count < 2)
+        {
+          chatroom(command->args[1], command->args[2]);
+        }
       }
-      int file2 = dup2(file, STDOUT_FILENO);
 
-      close(file);
+      env_path = getenv("PATH"); // gets enviroment path
+      char* temp_path = strtok(env_path, ":"); //divides by :
+      char path[2000];
+
+      while (temp_path != NULL) {
+        strcpy(path, temp_path); // copies part of already parsed path to full path
+        strcat(path, "/"); // appends / char
+        strcat(path, command->name); // appends command name to full path
+
+        execv(path, command->args); // executes path with arguments
+        temp_path = strtok(NULL, ":"); //start from where you finished
+      }
+      printf("-%s: %s: command not found\n", sysname, command->name);
+      exit(127); 
     }
-    //check if file exists, if not - append. It replaces fd(file descriptor) to check whether file exists and if it does - to overwrite the contents
-    if(command -> redirects[2] != NULL) // >>
-    {
-      int file = open(command -> redirects[2], O_WRONLY | O_CREAT | O_APPEND, 0777);
 
-      if(file == -1)
+    //second forking
+    pid_t pid2;
+    pid2 = fork();
+    if(pid2 == 0)
+    {
+
+      IOredirections(command->next);
+      dup2(fd[0], STDIN_FILENO);
+      close(fd[1]);
+      close(fd[0]);
+
+      //cut command
+
+      if(strcmp(command->next->name, "cut") == 0)
       {
-        return -2;
+        cut_Command(command);
+        exit(0);
       }
-      int file2 = dup2(file, STDOUT_FILENO);
 
-      close(file);
+      //chatroom command
+
+      if(strcmp(command->name, "chatroom") == 0)
+      {
+        if(!command->arg_count < 2)
+        {
+          chatroom(command->args[1], command->args[2]);
+        }
+      }
+      char* temp_path2 = strtok(env_path, ":"); //divides by :
+      char path2[2000];
+
+      while (temp_path2 != NULL) {
+        strcpy(path2, temp_path2); // copies part of already parsed path to full path
+        strcat(path2, "/"); // appends / char
+        strcat(path2, (command->next->name)); // appends command name to full path
+
+        execv(path2, (command->next->args)); // executes path with arguments
+        temp_path2 = strtok(NULL, ":"); //start from where you finished
+      }
+      printf("-%s: %s: command not found\n", sysname, command->name);
+      exit(127); 
     }
-    //--------------------------//
-
-    char* env_path = getenv("PATH"); // gets enviroment path
-    char* temp_path = strtok(env_path, ":"); //divides by :
-    char path[2000];
-
-    while (temp_path != NULL) {
-      strcpy(path, temp_path); // copies part of already parsed path to full path
-      strcat(path, "/"); // appends / char
-      strcat(path, command->name); // appends command name to full path
-
-      execv(path, command->args); // executes path with arguments
-      temp_path = strtok(NULL, ":"); //start from where you finished
-    }
-    
-    printf("-%s: %s: command not found\n", sysname, command->name);
-    exit(127);
-  } else {
-    // TODO: implement background processes here
-    if(command -> background == 0) // check if command is in foreground
+    close(fd[0]);
+    close(fd[1]);
+    if(command->background == 0) // check if command is in foreground
     {
-      //wait(0); // sometimes works, sometimes doesnt
-      waitpid(pid, NULL, 0); // blocks the parent process until child process is finished,
-      // line 424 was recommended by Gemini AI
+      waitpid(pid1, NULL, 0); // blocks the parent process until child process is finished,
+      waitpid(pid2, NULL, 0);
+      // line 422 was recommended by Gemini AI, it was used to understand when to use waitpid() and when to use wait().
     }
     return SUCCESS;
   }
-}
+  else 
+  {
+    pid_t pid = fork();
+    if(pid == 0)
+    {
+      IOredirections(command);
+      char* temp_path2 = strtok(env_path, ":"); //divides by :
+      char path2[2000];
 
-int main() {
-  while (1) {
+      //cut command
+
+      if(strcmp(command->name, "cut") == 0)
+      {
+        cut_Command(command);
+        exit(0);
+      }
+
+      //chatroom command
+
+      if(strcmp(command->name, "chatroom") == 0)
+      {
+        if(!command->arg_count < 2)
+        {
+          chatroom(command->args[1], command->args[2]);
+        }
+      }
+
+      while (temp_path2 != NULL) {
+        strcpy(path2, temp_path2); // copies part of already parsed path to full path
+        strcat(path2, "/"); // appends / char
+        strcat(path2, (command->name)); // appends command name to full path
+        execv(path2, (command->args)); // executes path with arguments
+        temp_path2 = strtok(NULL, ":"); //start from where you finished
+      }
+      printf("-%s: %s: command not found\n", sysname, command->name);
+      exit(127); 
+    }
+    if(command->background == 0)
+    {
+      waitpid(pid, NULL, 0);
+    }
+    return SUCCESS; 
+  }  
+}
+int main() 
+{
+  while (1) 
+  {
     struct command_t *command =
         (struct command_t *)malloc(sizeof(struct command_t));
     memset(command, 0, sizeof(struct command_t)); // set all bytes to 0
@@ -449,3 +708,4 @@ int main() {
   printf("\n");
   return 0;
 }
+
